@@ -1,0 +1,78 @@
+name: Update top song
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # every hour
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch top song and write data.json
+        env:
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
+        run: |
+          node - <<'EOF'
+          const credentials = Buffer.from(`${process.env.CLIENT_ID}:${process.env.CLIENT_SECRET}`).toString('base64');
+
+          async function getToken() {
+            const res = await fetch('https://accounts.spotify.com/api/token', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Authorization: `Basic ${credentials}`,
+              },
+              body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: process.env.REFRESH_TOKEN }),
+            });
+            const data = await res.json();
+            if (!data.access_token) throw new Error(JSON.stringify(data));
+            return data.access_token;
+          }
+
+          async function main() {
+            const token = await getToken();
+
+            const res = await fetch('https://api.spotify.com/v1/me/player/recently-played?limit=50', {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = await res.json();
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            const counts = {};
+            for (const item of data.items) {
+              if (new Date(item.played_at) < today) continue;
+              const { id, name, artists, album } = item.track;
+              if (!counts[id]) counts[id] = { name, artist: artists.map(a => a.name).join(', '), album_art: album.images[0]?.url, count: 0 };
+              counts[id].count++;
+            }
+
+            const sorted = Object.values(counts).sort((a, b) => b.count - a.count);
+            const top = sorted[0] || null;
+
+            const output = top
+              ? { name: top.name, artist: top.artist, album_art: top.album_art, play_count: top.count, updated_at: new Date().toISOString() }
+              : { name: null, updated_at: new Date().toISOString() };
+
+            require('fs').writeFileSync('data.json', JSON.stringify(output, null, 2));
+            console.log('Wrote:', output.name || 'no plays today');
+          }
+
+          main().catch(e => { console.error(e); process.exit(1); });
+          EOF
+
+      - name: Commit data.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git diff --cached --quiet || git commit -m "Update top song"
+          git push
