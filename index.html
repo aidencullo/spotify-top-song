@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Top Song Today</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d0d0d;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      text-align: center;
+      padding: 2rem;
+      max-width: 480px;
+      width: 100%;
+    }
+
+    h1 {
+      font-size: 0.85rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 2.5rem;
+    }
+
+    .login-btn {
+      background: #1DB954;
+      color: #000;
+      border: none;
+      padding: 14px 36px;
+      border-radius: 500px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.05em;
+      transition: transform 0.1s, background 0.2s;
+    }
+
+    .login-btn:hover { background: #1ed760; transform: scale(1.03); }
+
+    .song-card {
+      display: none;
+    }
+
+    .album-art {
+      width: 220px;
+      height: 220px;
+      border-radius: 8px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      margin: 0 auto 1.5rem;
+      display: block;
+      object-fit: cover;
+    }
+
+    .play-count {
+      font-size: 0.75rem;
+      color: #1DB954;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 0.75rem;
+    }
+
+    .song-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 0.4rem;
+    }
+
+    .artist {
+      font-size: 1rem;
+      color: #aaa;
+    }
+
+    .no-plays {
+      display: none;
+      color: #888;
+      font-size: 0.95rem;
+    }
+
+    .loading {
+      display: none;
+      color: #888;
+      font-size: 0.9rem;
+    }
+
+    .error {
+      display: none;
+      color: #e74c3c;
+      font-size: 0.85rem;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>Top Song Today</h1>
+
+  <div id="login-section">
+    <button class="login-btn" onclick="login()">Connect Spotify</button>
+  </div>
+
+  <div id="loading" class="loading">Loading your plays...</div>
+
+  <div id="song-card" class="song-card">
+    <img id="album-art" class="album-art" src="" alt="Album art">
+    <div id="play-count" class="play-count"></div>
+    <div id="song-title" class="song-title"></div>
+    <div id="artist" class="artist"></div>
+  </div>
+
+  <div id="no-plays" class="no-plays">No plays found today yet.</div>
+  <div id="error" class="error"></div>
+</div>
+
+<script>
+  const CLIENT_ID = 'YOUR_CLIENT_ID_HERE';
+  const REDIRECT_URI = window.location.origin + window.location.pathname;
+  const SCOPES = 'user-read-recently-played';
+
+  function show(id) { document.getElementById(id).style.display = 'block'; }
+  function hide(id) { document.getElementById(id).style.display = 'none'; }
+
+  async function generateCodeVerifier() {
+    const array = new Uint8Array(64);
+    crypto.getRandomValues(array);
+    return btoa(String.fromCharCode(...array)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
+  async function generateCodeChallenge(verifier) {
+    const data = new TextEncoder().encode(verifier);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
+  async function login() {
+    const verifier = await generateCodeVerifier();
+    const challenge = await generateCodeChallenge(verifier);
+    sessionStorage.setItem('code_verifier', verifier);
+
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      scope: SCOPES,
+      code_challenge_method: 'S256',
+      code_challenge: challenge,
+    });
+
+    window.location.href = `https://accounts.spotify.com/authorize?${params}`;
+  }
+
+  async function exchangeCode(code) {
+    const verifier = sessionStorage.getItem('code_verifier');
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: verifier,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error_description || 'Token exchange failed');
+    return data.access_token;
+  }
+
+  async function getTopSongToday(token) {
+    const res = await fetch('https://api.spotify.com/v1/me/player/recently-played?limit=50', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error('Failed to fetch plays');
+    const data = await res.json();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const counts = {};
+    for (const item of data.items) {
+      const playedAt = new Date(item.played_at);
+      if (playedAt < today) continue;
+      const id = item.track.id;
+      if (!counts[id]) counts[id] = { track: item.track, count: 0 };
+      counts[id].count++;
+    }
+
+    const sorted = Object.values(counts).sort((a, b) => b.count - a.count);
+    return sorted[0] || null;
+  }
+
+  async function run() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const error = params.get('error');
+
+    if (error) {
+      show('error');
+      document.getElementById('error').textContent = `Auth error: ${error}`;
+      return;
+    }
+
+    if (!code) return;
+
+    // Clear code from URL
+    window.history.replaceState({}, '', window.location.pathname);
+    hide('login-section');
+    show('loading');
+
+    try {
+      const token = await exchangeCode(code);
+      const top = await getTopSongToday(token);
+      hide('loading');
+
+      if (!top) {
+        show('no-plays');
+        return;
+      }
+
+      const { track, count } = top;
+      const art = track.album.images[0]?.url;
+      if (art) document.getElementById('album-art').src = art;
+      document.getElementById('play-count').textContent = `${count} play${count !== 1 ? 's' : ''} today`;
+      document.getElementById('song-title').textContent = track.name;
+      document.getElementById('artist').textContent = track.artists.map(a => a.name).join(', ');
+
+      show('song-card');
+    } catch (err) {
+      hide('loading');
+      show('login-section');
+      show('error');
+      document.getElementById('error').textContent = err.message;
+    }
+  }
+
+  run();
+</script>
+</body>
+</html>
