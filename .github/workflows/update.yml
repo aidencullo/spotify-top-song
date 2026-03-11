@@ -44,12 +44,12 @@ jobs:
             });
             const data = await res.json();
 
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            const todayET = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
 
             const counts = {};
             for (const item of data.items) {
-              if (new Date(item.played_at) < today) continue;
+              const playedDateET = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(item.played_at));
+              if (playedDateET !== todayET) continue;
               const { id, name, artists, album } = item.track;
               if (!counts[id]) counts[id] = { name, artist: artists.map(a => a.name).join(', '), album_art: album.images[0]?.url, count: 0 };
               counts[id].count++;
